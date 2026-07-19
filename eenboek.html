@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Een boek</title>
+<style>
+  :root{
+    --geel:#f4c20d; --rood:#e03a2f; --blauw:#2b57c9;
+    --papier:#faf6ee; --inkt:#1a1a1a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;overflow:hidden;background:#2a2622;}
+  body{
+    font-family:"Futura","Century Gothic","Trebuchet MS",sans-serif;
+    display:flex;align-items:center;justify-content:center;
+    touch-action:none;user-select:none;
+  }
+  #boek{
+    position:relative;width:min(96vw,860px);aspect-ratio:4/3;
+    background:var(--papier);border-radius:6px;
+    box-shadow:0 20px 60px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.04);
+    overflow:hidden;cursor:pointer;
+    transition:background .4s ease;
+  }
+  #vel{position:absolute;inset:0;}
+  .stip{
+    position:absolute;border-radius:50%;
+    transition:transform .12s ease, opacity .3s ease, width .35s ease, height .35s ease,
+               left .35s ease, top .35s ease;
+    will-change:transform,left,top;
+  }
+  .stip.snel{transition:transform .1s ease, opacity .3s ease;}
+  #instructie{
+    position:absolute;left:0;right:0;bottom:26px;text-align:center;
+    font-size:clamp(15px,2.6vw,22px);color:var(--inkt);font-weight:600;
+    letter-spacing:.3px;padding:0 24px;line-height:1.35;pointer-events:none;
+    transition:opacity .35s ease, color .4s ease;
+  }
+  #teller{
+    position:absolute;top:16px;left:0;right:0;text-align:center;
+    font-size:clamp(30px,7vw,56px);font-weight:700;color:var(--inkt);
+    pointer-events:none;opacity:0;transition:opacity .3s ease;
+  }
+  #teller.aan{opacity:.85;}
+  #paginanr{
+    position:absolute;bottom:10px;right:16px;font-size:12px;color:#9a9186;
+    pointer-events:none;font-weight:600;
+  }
+  #hint{
+    position:absolute;top:12px;left:0;right:0;text-align:center;font-size:12px;
+    color:#b3aa9d;pointer-events:none;transition:opacity .4s ease;font-weight:600;
+  }
+  #controls{
+    position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
+    display:flex;gap:10px;z-index:10;
+  }
+  .btn{
+    background:rgba(255,255,255,.1);color:#eee;border:1px solid rgba(255,255,255,.18);
+    padding:8px 16px;border-radius:20px;font:inherit;font-size:13px;font-weight:600;
+    cursor:pointer;backdrop-filter:blur(4px);
+  }
+  .btn:active{transform:scale(.95);}
+  #mic-status{
+    position:fixed;top:14px;left:50%;transform:translateX(-50%);
+    font-size:12px;color:#c9bfae;font-weight:600;opacity:0;transition:opacity .3s;
+  }
+  #mic-status.on{opacity:1;}
+  @keyframes spring{
+    0%{transform:translateY(0);} 40%{transform:translateY(-18%);} 100%{transform:translateY(0);}
+  }
+  .stip.springt{animation:spring .45s ease;}
+</style>
+</head>
+<body>
+  <div id="boek">
+    <div id="vel"></div>
+    <div id="teller"></div>
+    <div id="hint"></div>
+    <div id="instructie"></div>
+    <div id="paginanr"></div>
+  </div>
+  <div id="controls">
+    <button class="btn" id="micBtn">🎤 Geluid aan</button>
+    <button class="btn" id="tiltBtn">📱 Kantelen aan</button>
+    <button class="btn" id="resetBtn">↺ Opnieuw</button>
+  </div>
+  <div id="mic-status"></div>
+
+<script>
+const vel = document.getElementById('vel');
+const boek = document.getElementById('boek');
+const instructie = document.getElementById('instructie');
+const paginanr = document.getElementById('paginanr');
+const hint = document.getElementById('hint');
+const tellerEl = document.getElementById('teller');
+const micStatus = document.getElementById('mic-status');
+const KLEUR = {geel:'var(--geel)', rood:'var(--rood)', blauw:'var(--blauw)'};
+
+let stippen = [];
+let pagina = 0;
+let advancing = false;
+
+function W(){return boek.clientWidth;}
+function H(){return boek.clientHeight;}
+
+function maakStip(x,y,d,kleur){
+  const el = document.createElement('div');
+  el.className='stip';
+  el.style.background = KLEUR[kleur];
+  const s = {el,x,y,d,kleur};
+  plaats(s);
+  vel.appendChild(el);
+  stippen.push(s);
+  return s;
+}
+function plaats(s){
+  s.el.style.width = s.d+'px';
+  s.el.style.height = s.d+'px';
+  s.el.style.left = (s.x - s.d/2)+'px';
+  s.el.style.top  = (s.y - s.d/2)+'px';
+}
+function wis(){ stippen.forEach(s=>s.el.remove()); stippen=[]; tellerEl.classList.remove('aan'); }
+function setTekst(t,h=''){ instructie.textContent=t; hint.textContent=h; }
+function rij(n,dFactor=0.1,ks=null){
+  const d=Math.min(W(),H())*dFactor;
+  for(let i=0;i<n;i++){
+    const k = ks ? ks[i%ks.length] : ['rood','geel','blauw'][i%3];
+    maakStip(W()*((0.5-(n-1)*0.055)+i*0.11),H()*0.45,d,k);
+  }
+}
+
+// ---- de pagina's ----
+const paginas = [
+  { // 0 — titel / start
+    setup(){ wis(); maakStip(W()/2,H()/2*0.9,Math.min(W(),H())*0.14,'geel');
+      setTekst('Druk op de gele stip.','een boek'); },
+  },
+  { // 1 — één werd twee
+    setup(){ wis(); const d=Math.min(W(),H())*0.13;
+      maakStip(W()*0.4,H()*0.45,d,'geel'); maakStip(W()*0.6,H()*0.45,d,'geel');
+      setTekst('Goed zo! Druk nog eens.'); },
+  },
+  { // 2 — drie stippen, wrijf links
+    setup(){ wis(); const d=Math.min(W(),H())*0.12;
+      maakStip(W()*0.35,H()*0.45,d,'geel'); maakStip(W()*0.5,H()*0.45,d,'geel'); maakStip(W()*0.65,H()*0.45,d,'geel');
+      setTekst('Wrijf voorzichtig over de linker stip...','sleep over de stip'); },
+    modes:['wrijf-links'],
+  },
+  { // 3 — kleuren verschijnen
+    setup(){ wis(); const d=Math.min(W(),H())*0.12;
+      maakStip(W()*0.35,H()*0.45,d,'rood'); maakStip(W()*0.5,H()*0.45,d,'geel'); maakStip(W()*0.65,H()*0.45,d,'blauw');
+      setTekst('Kijk! Druk nu maar weer.'); },
+  },
+  { // 4 — NIEUW: vijf keer tikken op de gele stip
+    setup(){ wis(); const d=Math.min(W(),H())*0.13;
+      maakStip(W()/2,H()*0.45,d,'geel');
+      tikTeller=0; tellerEl.textContent=''; tellerEl.classList.add('aan');
+      setTekst('Tik vijf keer op de gele stip!','1… 2… 3…'); },
+    tikVijf:true,
+  },
+  { // 5 — vijf gele stippen als beloning
+    setup(){ wis(); rij(5,0.1,['geel']);
+      setTekst('Vijf tikken, vijf stippen! Druk maar door.'); },
+  },
+  { // 6 — NIEUW: héél hard drukken → groeien
+    setup(){ wis(); rij(5,0.09);
+      setTekst('Druk nu eens HEEL hard op een stip…','houd lang ingedrukt'); },
+    hardDrukken:true,
+  },
+  { // 7 — grote stippen! schudden
+    setup(){ wis(); rij(5,0.16);
+      setTekst('Oei, wat groot! Tik op het boek om te schudden!','3 keer tikken'); },
+    schud:true,
+  },
+  { // 8 — chaos → kantel naar rechts
+    setup(){ wis(); const d=Math.min(W(),H())*0.1;
+      for(let i=0;i<5;i++){ const k=['rood','geel','blauw'][i%3];
+        maakStip(W()*(0.2+Math.random()*0.6),H()*(0.25+Math.random()*0.5),d,k); }
+      setTekst('Zet ze rechts door te kantelen →','kantel je toestel'); },
+    kantel:'rechts',
+  },
+  { // 9 — NIEUW: en nu weer terug naar links
+    setup(){ wis(); const d=Math.min(W(),H())*0.1;
+      for(let i=0;i<5;i++){ const k=['rood','geel','blauw'][i%3];
+        maakStip(W()*(0.78+ (i%2)*0.06),H()*(0.22+i*0.13),d,k); }
+      setTekst('← En nu allemaal weer naar links!','kantel de andere kant op'); },
+    kantel:'links',
+  },
+  { // 10 — blazen
+    setup(){ wis(); rij(7,0.09);
+      setTekst('Blaas de stippen weg!','zet 🎤 geluid aan en blaas lang'); },
+    blaas:true,
+  },
+  { // 11 — NIEUW: klappen
+    setup(){ wis(); rij(6,0.1);
+      setTekst('Klap in je handen!','een korte harde klap'); },
+    klap:true,
+  },
+  { // 12 — licht uit
+    setup(){ wis(); rij(6,0.1);
+      boek.style.background='var(--papier)';
+      setTekst('Druk om het licht uit te doen.'); },
+  },
+  { // 13 — donker: blaas het donker weg
+    setup(){ wis(); boek.style.background='#141414';
+      rij(6,0.1);
+      instructie.style.color='#f4f0e6'; paginanr.style.color='#555';
+      donkerTeller=0;
+      setTekst('Sst… blaas het donker weg!','of druk gewoon'); },
+    blaasDonker:true,
+  },
+  { // 14 — NIEUW: applaus-einde
+    setup(){ wis(); boek.style.background='var(--papier)';
+      instructie.style.color='var(--inkt)'; paginanr.style.color='#9a9186';
+      const d=Math.min(W(),H())*0.14; maakStip(W()/2,H()*0.42,d,'geel');
+      setTekst('Het was maar een boek… of toch niet? Druk op de gele stip!','en het begint opnieuw');
+      // confetti van stipjes
+      for(let i=0;i<14;i++){
+        setTimeout(()=>{
+          const k=['rood','geel','blauw'][i%3];
+          const s=maakStip(Math.random()*W(), -30, 14+Math.random()*18, k);
+          s.el.classList.add('snel');
+          requestAnimationFrame(()=>{ s.y = H()+40; s.el.style.transition='top '+(1.4+Math.random())+'s linear'; plaats(s); });
+        }, i*120);
+      }
+    },
+    einde:true,
+  },
+];
+
+function toon(n){
+  advancing=false;
+  pagina = Math.max(0, Math.min(n, paginas.length-1));
+  paginas[pagina].setup();
+  paginanr.textContent = pagina===0 ? '' : (pagina+' / '+(paginas.length-1));
+  instructie.style.opacity=1;
+  const p = paginas[pagina];
+  kantelActief = !!p.kantel;
+  kantelRichting = p.kantel==='links' ? -1 : 1;
+  blaasActief  = !!p.blaas;
+  klapActief   = !!p.klap;
+  blaasDonkerActief = !!p.blaasDonker;
+}
+function volgende(){
+  if(advancing) return;
+  const p = paginas[pagina];
+  advancing=true;
+  instructie.style.opacity=0;
+  stippen.forEach(s=>{ s.el.style.transform='scale(0.6)'; });
+  setTimeout(()=>{
+    stippen.forEach(s=>{ s.el.style.transform='scale(1)'; });
+    toon(p.einde ? 0 : pagina+1);   // oneindige loop
+  }, 240);
+}
+
+// ---- klik / tik ----
+let tikTeller=0;
+boek.addEventListener('click',(e)=>{
+  const p = paginas[pagina];
+  if(p.modes && p.modes.includes('wrijf-links')) return;
+  if(p.tikVijf){
+    const r=boek.getBoundingClientRect();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    const s=stippen[0];
+    if(s && Math.hypot(x-s.x,y-s.y)<s.d*0.75){
+      tikTeller++;
+      tellerEl.textContent=tikTeller;
+      s.el.style.transform='scale(1.15)';
+      setTimeout(()=>s.el.style.transform='scale(1)',110);
+      if(tikTeller>=5) setTimeout(volgende,350);
+    }
+    return;
+  }
+  if(p.hardDrukken) return; // wacht op long-press
+  if(p.schud){ schudEffect(); return; }
+  if(p.blaas||p.klap||p.kantel) return;
+  volgende();
+});
+
+// dubbel-tik fallback op sensor-pagina's
+let laatsteTik=0;
+boek.addEventListener('pointerdown',(e)=>{
+  const nu=Date.now();
+  if(nu-laatsteTik<350){
+    const p=paginas[pagina];
+    if(p.blaas||p.klap||p.kantel||(p.modes&&p.modes.length)) volgende();
+  }
+  laatsteTik=nu;
+});
+
+// ---- long-press = hard drukken ----
+let drukTimer=null, drukStip=null;
+boek.addEventListener('pointerdown',(e)=>{
+  const p=paginas[pagina];
+  if(!p.hardDrukken) return;
+  const r=boek.getBoundingClientRect();
+  const x=e.clientX-r.left, y=e.clientY-r.top;
+  for(const s of stippen){
+    if(Math.hypot(x-s.x,y-s.y)<s.d*0.8){ drukStip=s; break; }
+  }
+  if(!drukStip) return;
+  let stap=0;
+  drukTimer=setInterval(()=>{
+    stap++;
+    drukStip.d*=1.12; plaats(drukStip);
+    if(stap>=6){ clearInterval(drukTimer); drukTimer=null;
+      stippen.forEach(s=>{ if(s!==drukStip){ s.d*=1.5; plaats(s);} });
+      setTimeout(volgende,650); }
+  },160);
+});
+window.addEventListener('pointerup',()=>{
+  if(drukTimer){ clearInterval(drukTimer); drukTimer=null; }
+  drukStip=null;
+});
+
+// ---- slepen / wrijven ----
+let sleepActief=false;
+boek.addEventListener('pointerdown',startSleep);
+window.addEventListener('pointermove',doeSleep);
+window.addEventListener('pointerup',()=>sleepActief=false);
+function startSleep(e){ sleepActief=true; doeSleep(e); }
+function doeSleep(e){
+  if(!sleepActief) return;
+  const r=boek.getBoundingClientRect();
+  const x=e.clientX-r.left, y=e.clientY-r.top;
+  const p=paginas[pagina];
+  if(p.modes && p.modes.includes('wrijf-links')){
+    const s=stippen[0]; if(!s) return;
+    if(Math.hypot(x-s.x,y-s.y) < s.d){ s._wrijf=(s._wrijf||0)+1;
+      s.el.style.transform='scale('+(1+Math.min(s._wrijf,10)*0.04)+')';
+      if(s._wrijf>14) volgende();
+    }
+    return;
+  }
+  if(p.tikVijf||p.hardDrukken) return;
+  let dichtst=null,dm=1e9;
+  for(const s of stippen){ const dd=Math.hypot(x-s.x,y-s.y); if(dd<dm && dd<s.d*1.4){dm=dd;dichtst=s;} }
+  if(dichtst){ dichtst.x=x; dichtst.y=y; plaats(dichtst); }
+}
+
+// ---- schudden ----
+let schudTeller=0;
+function schudEffect(){
+  schudTeller++;
+  stippen.forEach(s=>{
+    s.x=W()*(0.15+Math.random()*0.7); s.y=H()*(0.2+Math.random()*0.6);
+    plaats(s);
+  });
+  if(schudTeller>=3){ schudTeller=0; volgende(); }
+}
+
+// ---- kantelen ----
+let kantelActief=false, kantelAan=false, kantelGeregistreerd=false, kantelRichting=1;
+function opKantel(ev){
+  const g = (ev.gamma!=null?ev.gamma:0);
+  const b = (ev.beta!=null?ev.beta:0);
+  if(kantelActief){ micStatus.classList.add('on'); micStatus.textContent='γ '+g.toFixed(0)+'°  β '+b.toFixed(0)+'°'; }
+  if(!kantelActief||!kantelAan) return;
+  const bruikbaar = Math.abs(g) >= Math.abs(b) ? g : b;
+  if(Math.abs(bruikbaar) < 4) return;
+  const kracht = Math.max(-1,Math.min(1,bruikbaar/45));
+  let klaar=true;
+  stippen.forEach(s=>{
+    s.el.classList.add('snel');
+    s.x += kracht*7;
+    s.x=Math.max(s.d/2,Math.min(W()-s.d/2,s.x));
+    plaats(s);
+    if(kantelRichting===1 && s.x < W()*0.72) klaar=false;
+    if(kantelRichting===-1 && s.x > W()*0.28) klaar=false;
+  });
+  if(klaar && stippen.length) volgende();
+}
+function registreerKantel(){
+  if(kantelGeregistreerd) return;
+  window.addEventListener('deviceorientation',opKantel,true);
+  kantelGeregistreerd=true;
+}
+document.getElementById('tiltBtn').addEventListener('click',async()=>{
+  if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+    try{ const r=await DeviceOrientationEvent.requestPermission(); kantelAan=(r==='granted'); }catch(e){ kantelAan=false; }
+  } else { kantelAan=true; }
+  if(kantelAan) registreerKantel();
+  document.getElementById('tiltBtn').textContent = kantelAan?'📱 Kantelen ✓':'📱 Niet ondersteund';
+  if(kantelAan && !window.isSecureContext){
+    micStatus.classList.add('on'); micStatus.textContent='⚠ geen HTTPS — sensoren geven 0';
+  }
+});
+
+// ---- microfoon: blazen én klappen ----
+let blaasActief=false, klapActief=false, blaasDonkerActief=false, donkerTeller=0, micAan=false, analyser=null, dataArr=null;
+let volGeschiedenis=[];
+document.getElementById('micBtn').addEventListener('click',async()=>{
+  if(micAan){ micAan=false; document.getElementById('micBtn').textContent='🎤 Geluid aan'; micStatus.classList.remove('on'); return; }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const src=ctx.createMediaStreamSource(stream);
+    analyser=ctx.createAnalyser(); analyser.fftSize=512;
+    dataArr=new Uint8Array(analyser.frequencyBinCount); src.connect(analyser);
+    micAan=true; document.getElementById('micBtn').textContent='🎤 Geluid ✓';
+    micStatus.classList.add('on');
+    luister();
+  }catch(e){ document.getElementById('micBtn').textContent='🎤 Geen toegang'; }
+});
+function luister(){
+  if(!micAan) return;
+  requestAnimationFrame(luister);
+  analyser.getByteFrequencyData(dataArr);
+  let som=0; for(let i=0;i<dataArr.length;i++) som+=dataArr[i];
+  const vol=som/dataArr.length;
+  volGeschiedenis.push(vol); if(volGeschiedenis.length>30) volGeschiedenis.shift();
+  if(!kantelActief) micStatus.textContent='Volume: '+Math.round(vol);
+
+  // blazen: aanhoudend volume
+  if(blaasActief && vol>55){
+    let alleWeg=true;
+    stippen.forEach(s=>{
+      s.el.classList.add('snel');
+      s.y -= (vol-40)*0.12; plaats(s);
+      s.el.style.opacity = Math.max(0,(s.y+s.d)/(H()*0.4));
+      if(s.y > -s.d) alleWeg=false;
+    });
+    if(alleWeg && stippen.length) volgende();
+  }
+
+  // zwart wegblazen: donker wordt lichter zolang je blaast
+  if(blaasDonkerActief && vol>55){
+    donkerTeller=Math.min(donkerTeller+ (vol-40)*0.015, 20);
+    const t=donkerTeller/20; // 0..1
+    const c=Math.round(20+t*(250-20));
+    boek.style.background='rgb('+c+','+Math.round(c*0.985)+','+Math.round(c*0.94)+')';
+    instructie.style.opacity=1-t;
+    if(donkerTeller>=20){ blaasDonkerActief=false; volgende(); }
+  }
+
+  // klappen: korte piek t.o.v. het gemiddelde ervoor
+  if(klapActief && volGeschiedenis.length>10){
+    const eerder = volGeschiedenis.slice(0,-3);
+    const gem = eerder.reduce((a,b)=>a+b,0)/eerder.length;
+    if(vol > Math.max(70, gem+45)){
+      stippen.forEach(s=>{ s.el.classList.remove('springt'); void s.el.offsetWidth; s.el.classList.add('springt'); });
+      klapActief=false;
+      setTimeout(volgende,600);
+    }
+  }
+}
+
+document.getElementById('resetBtn').addEventListener('click',()=>{ schudTeller=0; toon(0); });
+
+toon(0);
+window.addEventListener('resize',()=>toon(pagina));
+</script>
+</body>
+</html>
